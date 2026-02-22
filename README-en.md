@@ -71,7 +71,7 @@ This project is just my personal learning and development and maintenance. I do 
 ### 1-Click installation
 
 ```
-wget -N https://raw.githubusercontent.com/clavin-dev/xrayr/main/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/clavin-dev/XrayR-release/master/install.sh && bash install.sh
 ```
 
 ### Docker
@@ -106,4 +106,3 @@ wget -N https://raw.githubusercontent.com/clavin-dev/xrayr/main/install.sh && ba
 ## Stargazers over time
 
 [![Stargazers over time](https://starchart.cc/XrayR-project/XrayR.svg)](https://starchart.cc/XrayR-project/XrayR)
-

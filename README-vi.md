@@ -68,7 +68,7 @@ Dự án này chỉ là học tập và phát triển và bảo trì cá nhân c
 ### Một cài đặt chính
 
 ```
-wget -N https://raw.githubusercontent.com/clavin-dev/xrayr/main/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/clavin-dev/XrayR-release/master/install.sh && bash install.sh
 ```
 
 ### Sử dụng phần mềm triển khai Docker

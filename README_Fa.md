@@ -66,7 +66,7 @@
 ### نصب بصورت یکپارچه
 
 ```
-wget -N https://raw.githubusercontent.com/clavin-dev/xrayr/main/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/clavin-dev/XrayR-release/master/install.sh && bash install.sh
 ```
 
 ### استقرار نرم افزار با استفاده از Docker
@@ -101,4 +101,3 @@ wget -N https://raw.githubusercontent.com/clavin-dev/xrayr/main/install.sh && ba
 ## Stargazers over time
 
 [![Stargazers over time](https://starchart.cc/XrayR-project/XrayR.svg)](https://starchart.cc/XrayR-project/XrayR)
-

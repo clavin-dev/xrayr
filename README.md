@@ -70,7 +70,7 @@ A Xray backend framework that can easily support many panels.
 ### 一键安装
 
 ```
-wget -N https://raw.githubusercontent.com/clavin-dev/xrayr/main/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/clavin-dev/XrayR-release/master/install.sh && bash install.sh
 ```
 
 ### 使用Docker部署软件
@@ -105,4 +105,3 @@ wget -N https://raw.githubusercontent.com/clavin-dev/xrayr/main/install.sh && ba
 ## Stargazers over time
 
 [![Stargazers over time](https://starchart.cc/XrayR-project/XrayR.svg)](https://starchart.cc/XrayR-project/XrayR)
-
