@@ -46,6 +46,7 @@ type Controller struct {
 	trafficCounterCache *sync.Map
 	trafficSweepTick    int
 	panelType           string
+	isV2boardPanel      bool
 	ibm                 inbound.Manager
 	obm                 outbound.Manager
 	stm                 stats.Manager
@@ -74,6 +75,7 @@ func New(server *core.Instance, api api.API, config *Config, panelType string) *
 		config:              config,
 		apiClient:           api,
 		panelType:           panelType,
+		isV2boardPanel:      strings.Contains(panelType, "V2board"),
 		trafficCounterCache: new(sync.Map),
 		ibm:                 server.GetFeature(inbound.ManagerType()).(inbound.Manager),
 		obm:                 server.GetFeature(outbound.ManagerType()).(outbound.Manager),
@@ -445,7 +447,7 @@ func (c *Controller) addNewUser(userInfo *[]api.UserInfo, nodeInfo *api.NodeInfo
 	if err != nil {
 		return err
 	}
-	c.logger.Printf("Added %d new users", len(*userInfo))
+	c.logger.Printf("Added %d new users", len(users))
 	return nil
 }
 

@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
-	C "github.com/sagernet/sing/common"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf"
@@ -108,14 +106,15 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 		// shadowsocks must have a random password
 		// shadowsocks2022's password == user PSK, thus should a length of string >= 32 and base64 encoder
 		b := make([]byte, 32)
-		rand.Read(b)
-		randPasswd := hex.EncodeToString(b)
-		if C.Contains(shadowaead_2022.List, cipher) {
+		if _, err := rand.Read(b); err != nil {
+			return nil, fmt.Errorf("generate shadowsocks random key failed: %w", err)
+		}
+		if isShadowsocks2022Method(cipher) {
 			proxySetting.Users = append(proxySetting.Users, &conf.ShadowsocksUserConfig{
 				Password: base64.StdEncoding.EncodeToString(b),
 			})
 		} else {
-			proxySetting.Password = randPasswd
+			proxySetting.Password = hex.EncodeToString(b)
 		}
 
 		proxySetting.NetworkList = &conf.NetworkList{"tcp", "udp"}
@@ -238,7 +237,9 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 		tlsSettings := &conf.TLSConfig{
 			RejectUnknownSNI: config.CertConfig.RejectUnknownSni,
 		}
-		tlsSettings.Certs = append(tlsSettings.Certs, &conf.TLSCertConfig{CertFile: certFile, KeyFile: keyFile, OcspStapling: 3600})
+		tlsSettings.Certs = []*conf.TLSCertConfig{
+			{CertFile: certFile, KeyFile: keyFile, OcspStapling: 3600},
+		}
 		streamSetting.TLSSettings = tlsSettings
 	}
 

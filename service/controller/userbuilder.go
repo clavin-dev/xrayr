@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
-	C "github.com/sagernet/sing/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
@@ -25,6 +24,19 @@ var AEADMethod = map[shadowsocks.CipherType]uint8{
 	shadowsocks.CipherType_AES_256_GCM:        0,
 	shadowsocks.CipherType_CHACHA20_POLY1305:  0,
 	shadowsocks.CipherType_XCHACHA20_POLY1305: 0,
+}
+
+var shadowaead2022MethodSet = func() map[string]struct{} {
+	methodSet := make(map[string]struct{}, len(shadowaead_2022.List))
+	for _, method := range shadowaead_2022.List {
+		methodSet[strings.ToLower(method)] = struct{}{}
+	}
+	return methodSet
+}()
+
+func isShadowsocks2022Method(method string) bool {
+	_, ok := shadowaead2022MethodSet[strings.ToLower(method)]
+	return ok
 }
 
 func (c *Controller) buildVmessUser(userInfo *[]api.UserInfo) (users []*protocol.User) {
@@ -75,77 +87,102 @@ func (c *Controller) buildTrojanUser(userInfo *[]api.UserInfo) (users []*protoco
 }
 
 func (c *Controller) buildSSUser(userInfo *[]api.UserInfo, method string) (users []*protocol.User) {
-	users = make([]*protocol.User, len(*userInfo))
+	users = make([]*protocol.User, 0, len(*userInfo))
+	normalizedMethod := strings.ToLower(method)
+	isSS2022 := isShadowsocks2022Method(normalizedMethod)
+	cipherMethod := cipherFromLowerString(normalizedMethod)
 
-	for i, user := range *userInfo {
+	for i := range *userInfo {
+		user := &(*userInfo)[i]
 		// shadowsocks2022 Key = "openssl rand -base64 32" and multi users needn't cipher method
-		if C.Contains(shadowaead_2022.List, strings.ToLower(method)) {
-			e := c.buildUserTag(&user)
-			userKey, err := c.checkShadowsocksPassword(user.Passwd, method)
+		if isSS2022 {
+			userKey, err := c.checkShadowsocksPassword(user.Passwd, normalizedMethod)
 			if err != nil {
 				errors.LogError(context.Background(), "[UID: %d] %s", user.UID, err)
 				continue
 			}
-			users[i] = &protocol.User{
+			users = append(users, &protocol.User{
 				Level: 0,
-				Email: e,
+				Email: c.buildUserTag(user),
 				Account: serial.ToTypedMessage(&shadowsocks_2022.Account{
 					Key: userKey,
 				}),
-			}
+			})
 		} else {
-			users[i] = &protocol.User{
+			users = append(users, &protocol.User{
 				Level: 0,
-				Email: c.buildUserTag(&user),
+				Email: c.buildUserTag(user),
 				Account: serial.ToTypedMessage(&shadowsocks.Account{
 					Password:   user.Passwd,
-					CipherType: cipherFromString(method),
+					CipherType: cipherMethod,
 				}),
-			}
+			})
 		}
 	}
 	return users
 }
 
 func (c *Controller) buildSSPluginUser(userInfo *[]api.UserInfo) (users []*protocol.User) {
-	users = make([]*protocol.User, len(*userInfo))
+	type methodMeta struct {
+		isSS2022 bool
+		cipher   shadowsocks.CipherType
+		isAEAD   bool
+	}
+	users = make([]*protocol.User, 0, len(*userInfo))
+	methodCache := make(map[string]methodMeta, 8)
 
-	for i, user := range *userInfo {
+	for i := range *userInfo {
+		user := &(*userInfo)[i]
+		normalizedMethod := strings.ToLower(user.Method)
+		meta, ok := methodCache[normalizedMethod]
+		if !ok {
+			cipherMethod := cipherFromLowerString(normalizedMethod)
+			_, isAEAD := AEADMethod[cipherMethod]
+			meta = methodMeta{
+				isSS2022: isShadowsocks2022Method(normalizedMethod),
+				cipher:   cipherMethod,
+				isAEAD:   isAEAD,
+			}
+			methodCache[normalizedMethod] = meta
+		}
 		// shadowsocks2022 Key = openssl rand -base64 32 and multi users needn't cipher method
-		if C.Contains(shadowaead_2022.List, strings.ToLower(user.Method)) {
-			e := c.buildUserTag(&user)
-			userKey, err := c.checkShadowsocksPassword(user.Passwd, user.Method)
+		if meta.isSS2022 {
+			userKey, err := c.checkShadowsocksPassword(user.Passwd, normalizedMethod)
 			if err != nil {
 				errors.LogError(context.Background(), "[UID: %d] %s", user.UID, err)
 				continue
 			}
-			users[i] = &protocol.User{
+			users = append(users, &protocol.User{
 				Level: 0,
-				Email: e,
+				Email: c.buildUserTag(user),
 				Account: serial.ToTypedMessage(&shadowsocks_2022.Account{
 					Key: userKey,
 				}),
-			}
+			})
 		} else {
 			// Check if the cypher method is AEAD
-			cypherMethod := cipherFromString(user.Method)
-			if _, ok := AEADMethod[cypherMethod]; ok {
-				users[i] = &protocol.User{
-					Level: 0,
-					Email: c.buildUserTag(&user),
-					Account: serial.ToTypedMessage(&shadowsocks.Account{
-						Password:   user.Passwd,
-						CipherType: cypherMethod,
-					}),
-				}
+			if !meta.isAEAD {
+				continue
 			}
+			users = append(users, &protocol.User{
+				Level: 0,
+				Email: c.buildUserTag(user),
+				Account: serial.ToTypedMessage(&shadowsocks.Account{
+					Password:   user.Passwd,
+					CipherType: meta.cipher,
+				}),
+			})
 		}
 	}
 	return users
 }
 
 func cipherFromString(c string) shadowsocks.CipherType {
-	switch strings.ToLower(c) {
+	return cipherFromLowerString(strings.ToLower(c))
+}
+
+func cipherFromLowerString(c string) shadowsocks.CipherType {
+	switch c {
 	case "aes-128-gcm", "aead_aes_128_gcm":
 		return shadowsocks.CipherType_AES_128_GCM
 	case "aes-256-gcm", "aead_aes_256_gcm":
@@ -164,21 +201,21 @@ func (c *Controller) buildUserTag(user *api.UserInfo) string {
 }
 
 func (c *Controller) checkShadowsocksPassword(password string, method string) (string, error) {
-	if strings.Contains(c.panelType, "V2board") {
-		var userKey string
-		if len(password) < 16 {
-			return "", newError("shadowsocks2022 key's length must be greater than 16").AtWarning()
-		}
-		if method == "2022-blake3-aes-128-gcm" {
-			userKey = password[:16]
-		} else {
-			if len(password) < 32 {
-				return "", newError("shadowsocks2022 key's length must be greater than 32").AtWarning()
-			}
-			userKey = password[:32]
-		}
-		return base64.StdEncoding.EncodeToString([]byte(userKey)), nil
-	} else {
+	if !c.isV2boardPanel {
 		return password, nil
 	}
+
+	var userKey string
+	if len(password) < 16 {
+		return "", newError("shadowsocks2022 key's length must be greater than 16").AtWarning()
+	}
+	if strings.ToLower(method) == "2022-blake3-aes-128-gcm" {
+		userKey = password[:16]
+	} else {
+		if len(password) < 32 {
+			return "", newError("shadowsocks2022 key's length must be greater than 32").AtWarning()
+		}
+		userKey = password[:32]
+	}
+	return base64.StdEncoding.EncodeToString([]byte(userKey)), nil
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/outbound"
-	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/transport"
@@ -26,8 +25,6 @@ func (c *Controller) removeInbound(tag string) error {
 // statsOutboundWrapper wraps outbound.Handler to ensure user downlink traffic is counted.
 type statsOutboundWrapper struct {
 	outbound.Handler
-	pm policy.Manager
-	sm stats.Manager
 }
 
 type trafficCounterPair struct {
@@ -73,7 +70,7 @@ func (c *Controller) addOutbound(config *core.OutboundHandlerConfig) error {
 		return fmt.Errorf("not an InboundHandler: %s", err)
 	}
 	// Wrap outbound handler to ensure downlink stats are always counted (e.g., REALITY/VLESS cases)
-	handler = &statsOutboundWrapper{Handler: handler, pm: c.pm, sm: c.stm}
+	handler = &statsOutboundWrapper{Handler: handler}
 	if err := c.obm.AddHandler(context.Background(), handler); err != nil {
 		return err
 	}
@@ -95,6 +92,9 @@ func (c *Controller) addUsers(users []*protocol.User, tag string) error {
 		return fmt.Errorf("handler %s has not implemented proxy.UserManager", tag)
 	}
 	for _, item := range users {
+		if item == nil {
+			continue
+		}
 		mUser, err := item.ToMemoryUser()
 		if err != nil {
 			return err

@@ -72,6 +72,7 @@ func TestBuildSS(t *testing.T) {
 		NodeID:            1,
 		Port:              1145,
 		SpeedLimit:        0,
+		CypherMethod:      "aes-128-gcm",
 		AlterID:           2,
 		TransportProtocol: "tcp",
 		Host:              "test.test.tk",
