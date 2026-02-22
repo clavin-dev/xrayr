@@ -39,6 +39,11 @@ type cachedReader struct {
 	cache  buf.MultiBuffer
 }
 
+type userCounterPair struct {
+	uplink   stats.Counter
+	downlink stats.Counter
+}
+
 func (r *cachedReader) Cache(b *buf.Buffer) {
 	mb, _ := r.reader.ReadMultiBufferTimeout(time.Millisecond * 100)
 	r.Lock()
@@ -96,14 +101,15 @@ func (r *cachedReader) Interrupt() {
 // and adds XrayR-specific features like rate limiting and rule management.
 type DefaultDispatcher struct {
 	*dispatcher.DefaultDispatcher
-	ohm         outbound.Manager
-	router      routing.Router
-	policy      policy.Manager
-	stats       stats.Manager
-	dns         dns.Client
-	fdns        dns.FakeDNSEngine
-	Limiter     *limiter.Limiter
-	RuleManager *rule.Manager
+	ohm                     outbound.Manager
+	router                  routing.Router
+	policy                  policy.Manager
+	stats                   stats.Manager
+	dns                     dns.Client
+	fdns                    dns.FakeDNSEngine
+	Limiter                 *limiter.Limiter
+	RuleManager             *rule.Manager
+	userTrafficCounterCache *sync.Map
 }
 
 func init() {
@@ -142,6 +148,7 @@ func (d *DefaultDispatcher) Init(config *Config, om outbound.Manager, router rou
 	d.stats = sm
 	d.Limiter = limiter.New()
 	d.RuleManager = rule.New()
+	d.userTrafficCounterCache = new(sync.Map)
 	d.dns = dns
 	return nil
 }
@@ -159,6 +166,45 @@ func (*DefaultDispatcher) Start() error {
 // Close implements common.Closable.
 func (*DefaultDispatcher) Close() error {
 	return nil
+}
+
+func (d *DefaultDispatcher) getUserTrafficCounter(email string) (uplink stats.Counter, downlink stats.Counter) {
+	if cached, ok := d.userTrafficCounterCache.Load(email); ok {
+		if pair, ok := cached.(userCounterPair); ok {
+			return pair.uplink, pair.downlink
+		}
+	}
+
+	uplinkName := "user>>>" + email + ">>>traffic>>>uplink"
+	downlinkName := "user>>>" + email + ">>>traffic>>>downlink"
+
+	uplink = d.stats.GetCounter(uplinkName)
+	if uplink == nil {
+		uplink, _ = stats.GetOrRegisterCounter(d.stats, uplinkName)
+	}
+	downlink = d.stats.GetCounter(downlinkName)
+	if downlink == nil {
+		downlink, _ = stats.GetOrRegisterCounter(d.stats, downlinkName)
+	}
+
+	if uplink != nil && downlink != nil {
+		d.userTrafficCounterCache.Store(email, userCounterPair{
+			uplink:   uplink,
+			downlink: downlink,
+		})
+	}
+	return uplink, downlink
+}
+
+func (d *DefaultDispatcher) DropUserTrafficCounterCache(email string) {
+	d.userTrafficCounterCache.Delete(email)
+}
+
+func (d *DefaultDispatcher) ResetUserTrafficCounterCache() {
+	d.userTrafficCounterCache.Range(func(key, value interface{}) bool {
+		d.userTrafficCounterCache.Delete(key)
+		return true
+	})
 }
 
 func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *transport.Link, error) {
@@ -202,20 +248,19 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		}
 
 		p := d.policy.ForLevel(user.Level)
+		uplinkCounter, downlinkCounter := d.getUserTrafficCounter(user.Email)
 		if p.Stats.UserUplink {
-			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
-			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
+			if uplinkCounter != nil {
 				inboundLink.Writer = &SizeStatWriter{
-					Counter: c,
+					Counter: uplinkCounter,
 					Writer:  inboundLink.Writer,
 				}
 			}
 		}
 		if p.Stats.UserDownlink {
-			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
-			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
+			if downlinkCounter != nil {
 				outboundLink.Writer = &SizeStatWriter{
-					Counter: c,
+					Counter: downlinkCounter,
 					Writer:  outboundLink.Writer,
 				}
 			}

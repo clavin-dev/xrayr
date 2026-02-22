@@ -207,6 +207,14 @@ func (c *Controller) GetOnlineUserKeys(tag string) ([]string, error) {
 	return c.dispatcher.Limiter.GetOnlineUserKeys(tag)
 }
 
+func (c *Controller) DropUserTrafficCounterCache(userTag string) {
+	c.dispatcher.DropUserTrafficCounterCache(userTag)
+}
+
+func (c *Controller) ResetUserTrafficCounterCache() {
+	c.dispatcher.ResetUserTrafficCounterCache()
+}
+
 func (c *Controller) UpdateRule(tag string, newRuleList []api.DetectRule) error {
 	err := c.dispatcher.RuleManager.UpdateRule(tag, newRuleList)
 	return err

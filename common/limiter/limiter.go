@@ -28,12 +28,104 @@ type UserInfo struct {
 	DeviceLimit int
 }
 
+// onlineIPSet stores online source IPs with a single-IP fast path to reduce
+// per-user memory overhead versus nested sync.Map.
+type onlineIPSet struct {
+	mu        sync.Mutex
+	singleIP  string
+	singleUID int
+	multi     map[string]int
+}
+
+func newOnlineIPSet() *onlineIPSet {
+	return &onlineIPSet{}
+}
+
+// Add inserts an online IP. It returns whether the IP is newly observed and
+// whether it should be rejected by local device limit.
+func (s *onlineIPSet) Add(ip string, uid int, deviceLimit int) (isNew bool, reject bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.multi != nil {
+		if _, ok := s.multi[ip]; ok {
+			return false, false
+		}
+		s.multi[ip] = uid
+		if deviceLimit > 0 && len(s.multi) > deviceLimit {
+			delete(s.multi, ip)
+			return true, true
+		}
+		return true, false
+	}
+
+	if s.singleIP == "" {
+		s.singleIP = ip
+		s.singleUID = uid
+		return true, false
+	}
+	if s.singleIP == ip {
+		return false, false
+	}
+	if deviceLimit > 0 && deviceLimit < 2 {
+		return true, true
+	}
+
+	s.multi = map[string]int{
+		s.singleIP: s.singleUID,
+		ip:         uid,
+	}
+	s.singleIP = ""
+	s.singleUID = 0
+	return true, false
+}
+
+func (s *onlineIPSet) Remove(ip string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.multi != nil {
+		delete(s.multi, ip)
+		if len(s.multi) == 1 {
+			for singleIP, uid := range s.multi {
+				s.singleIP = singleIP
+				s.singleUID = uid
+				break
+			}
+			s.multi = nil
+		}
+		return
+	}
+
+	if s.singleIP == ip {
+		s.singleIP = ""
+		s.singleUID = 0
+	}
+}
+
+func (s *onlineIPSet) AppendOnlineUsers(dst []api.OnlineUser) []api.OnlineUser {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.multi != nil {
+		for ip, uid := range s.multi {
+			dst = append(dst, api.OnlineUser{UID: uid, IP: ip})
+		}
+		return dst
+	}
+
+	if s.singleIP != "" {
+		dst = append(dst, api.OnlineUser{UID: s.singleUID, IP: s.singleIP})
+	}
+	return dst
+}
+
 type InboundInfo struct {
 	Tag            string
 	NodeSpeedLimit uint64
 	UserInfo       *sync.Map // Key: Email value: UserInfo
 	BucketHub      *sync.Map // key: Email, value: *rate.Limiter
-	UserOnlineIP   *sync.Map // Key: Email, value: {Key: IP, value: UID}
+	UserOnlineIP   *sync.Map // Key: Email, value: *onlineIPSet
 	GlobalLimit    struct {
 		config         *GlobalDeviceLimitConfig
 		globalOnlineIP *marshaler.Marshaler
@@ -149,13 +241,8 @@ func (l *Limiter) GetOnlineDevice(tag string) (*[]api.OnlineUser, error) {
 		})
 		inboundInfo.UserOnlineIP.Range(func(key, value interface{}) bool {
 			email := key.(string)
-			ipMap := value.(*sync.Map)
-			ipMap.Range(func(key, value interface{}) bool {
-				uid := value.(int)
-				ip := key.(string)
-				onlineUser = append(onlineUser, api.OnlineUser{UID: uid, IP: ip})
-				return true
-			})
+			ipSet := value.(*onlineIPSet)
+			onlineUser = ipSet.AppendOnlineUsers(onlineUser)
 			inboundInfo.UserOnlineIP.Delete(email) // Reset online device
 			return true
 		})
@@ -198,30 +285,22 @@ func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *r
 		}
 
 		// Local device limit
-		var ipMap *sync.Map
+		var ipSet *onlineIPSet
 		if v, ok := inboundInfo.UserOnlineIP.Load(email); ok {
-			ipMap = v.(*sync.Map)
+			ipSet = v.(*onlineIPSet)
 		} else {
-			newIPMap := new(sync.Map)
-			actual, _ := inboundInfo.UserOnlineIP.LoadOrStore(email, newIPMap)
-			ipMap = actual.(*sync.Map)
+			actual, _ := inboundInfo.UserOnlineIP.LoadOrStore(email, newOnlineIPSet())
+			ipSet = actual.(*onlineIPSet)
 		}
-		// If this is a new ip
-		if _, ok := ipMap.LoadOrStore(ip, uid); !ok && deviceLimit > 0 {
-			counter := 0
-			ipMap.Range(func(key, value interface{}) bool {
-				counter++
-				return true
-			})
-			if counter > deviceLimit {
-				ipMap.Delete(ip)
-				return nil, false, true
-			}
+		isNewIP, rejectByLocalLimit := ipSet.Add(ip, uid, deviceLimit)
+		if rejectByLocalLimit {
+			return nil, false, true
 		}
 
 		// GlobalLimit
-		if deviceLimit > 0 && inboundInfo.GlobalLimit.config != nil && inboundInfo.GlobalLimit.config.Enable {
+		if isNewIP && deviceLimit > 0 && inboundInfo.GlobalLimit.config != nil && inboundInfo.GlobalLimit.config.Enable {
 			if reject := globalLimit(inboundInfo, email, uid, ip, deviceLimit); reject {
+				ipSet.Remove(ip)
 				return nil, false, true
 			}
 		}

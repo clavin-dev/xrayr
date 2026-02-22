@@ -284,6 +284,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			c.trafficCounterCache.Delete(key)
 			return true
 		})
+		c.ResetUserTrafficCounterCache()
 		err = c.addNewUser(newUserInfo, newNodeInfo)
 		if err != nil {
 			c.logger.Print(err)
@@ -305,6 +306,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 				for i, u := range deleted {
 					deletedEmail[i] = c.buildUserTag(&u)
 					c.trafficCounterCache.Delete(deletedEmail[i])
+					c.DropUserTrafficCounterCache(deletedEmail[i])
 				}
 				err := c.removeUsers(deletedEmail, c.Tag)
 				if err != nil {
