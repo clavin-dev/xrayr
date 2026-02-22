@@ -1,0 +1,2 @@
+d08593d0c15321f73799add2a90550d993010b703e3ee32a87a84b413a8b4b5f  /Users/ahs/Desktop/xrayr/XrayR/attachments/XrayR-linux-amd64.tar.gz
+3eb986031ef66b351ebdec387ca3e6734b9117abf8e92e9e2922d3866ac22b80  /Users/ahs/Desktop/xrayr/XrayR/attachments/XrayR-linux-arm64.tar.gz
