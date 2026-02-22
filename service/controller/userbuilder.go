@@ -3,7 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
@@ -90,7 +90,7 @@ func (c *Controller) buildSSUser(userInfo *[]api.UserInfo, method string) (users
 				Level: 0,
 				Email: e,
 				Account: serial.ToTypedMessage(&shadowsocks_2022.Account{
-					Key:   userKey,
+					Key: userKey,
 				}),
 			}
 		} else {
@@ -123,7 +123,7 @@ func (c *Controller) buildSSPluginUser(userInfo *[]api.UserInfo) (users []*proto
 				Level: 0,
 				Email: e,
 				Account: serial.ToTypedMessage(&shadowsocks_2022.Account{
-					Key:   userKey,
+					Key: userKey,
 				}),
 			}
 		} else {
@@ -160,7 +160,7 @@ func cipherFromString(c string) shadowsocks.CipherType {
 }
 
 func (c *Controller) buildUserTag(user *api.UserInfo) string {
-	return fmt.Sprintf("%s|%s|%d", c.Tag, user.Email, user.UID)
+	return c.Tag + "|" + user.Email + "|" + strconv.Itoa(user.UID)
 }
 
 func (c *Controller) checkShadowsocksPassword(password string, method string) (string, error) {

@@ -50,6 +50,10 @@ func New() *Limiter {
 	}
 }
 
+func buildUserKey(tag, email string, uid int) string {
+	return tag + "|" + email + "|" + strconv.Itoa(uid)
+}
+
 func (l *Limiter) AddInboundLimiter(tag string, nodeSpeedLimit uint64, userList *[]api.UserInfo, globalLimit *GlobalDeviceLimitConfig) error {
 	inboundInfo := &InboundInfo{
 		Tag:            tag,
@@ -85,7 +89,7 @@ func (l *Limiter) AddInboundLimiter(tag string, nodeSpeedLimit uint64, userList 
 
 	userMap := new(sync.Map)
 	for _, u := range *userList {
-		userMap.Store(fmt.Sprintf("%s|%s|%d", tag, u.Email, u.UID), UserInfo{
+		userMap.Store(buildUserKey(tag, u.Email, u.UID), UserInfo{
 			UID:         u.UID,
 			SpeedLimit:  u.SpeedLimit,
 			DeviceLimit: u.DeviceLimit,
@@ -101,7 +105,8 @@ func (l *Limiter) UpdateInboundLimiter(tag string, updatedUserList *[]api.UserIn
 		inboundInfo := value.(*InboundInfo)
 		// Update User info
 		for _, u := range *updatedUserList {
-			inboundInfo.UserInfo.Store(fmt.Sprintf("%s|%s|%d", tag, u.Email, u.UID), UserInfo{
+			userKey := buildUserKey(tag, u.Email, u.UID)
+			inboundInfo.UserInfo.Store(userKey, UserInfo{
 				UID:         u.UID,
 				SpeedLimit:  u.SpeedLimit,
 				DeviceLimit: u.DeviceLimit,
@@ -109,13 +114,13 @@ func (l *Limiter) UpdateInboundLimiter(tag string, updatedUserList *[]api.UserIn
 			// Update old limiter bucket
 			limit := determineRate(inboundInfo.NodeSpeedLimit, u.SpeedLimit)
 			if limit > 0 {
-				if bucket, ok := inboundInfo.BucketHub.Load(fmt.Sprintf("%s|%s|%d", tag, u.Email, u.UID)); ok {
+				if bucket, ok := inboundInfo.BucketHub.Load(userKey); ok {
 					limiter := bucket.(*rate.Limiter)
 					limiter.SetLimit(rate.Limit(limit))
 					limiter.SetBurst(int(limit))
 				}
 			} else {
-				inboundInfo.BucketHub.Delete(fmt.Sprintf("%s|%s|%d", tag, u.Email, u.UID))
+				inboundInfo.BucketHub.Delete(userKey)
 			}
 		}
 	} else {
@@ -179,22 +184,24 @@ func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *r
 		}
 
 		// Local device limit
-		ipMap := new(sync.Map)
-		ipMap.Store(ip, uid)
-		// If any device is online
-		if v, ok := inboundInfo.UserOnlineIP.LoadOrStore(email, ipMap); ok {
-			ipMap := v.(*sync.Map)
-			// If this is a new ip
-			if _, ok := ipMap.LoadOrStore(ip, uid); !ok {
-				counter := 0
-				ipMap.Range(func(key, value interface{}) bool {
-					counter++
-					return true
-				})
-				if counter > deviceLimit && deviceLimit > 0 {
-					ipMap.Delete(ip)
-					return nil, false, true
-				}
+		var ipMap *sync.Map
+		if v, ok := inboundInfo.UserOnlineIP.Load(email); ok {
+			ipMap = v.(*sync.Map)
+		} else {
+			newIPMap := new(sync.Map)
+			actual, _ := inboundInfo.UserOnlineIP.LoadOrStore(email, newIPMap)
+			ipMap = actual.(*sync.Map)
+		}
+		// If this is a new ip
+		if _, ok := ipMap.LoadOrStore(ip, uid); !ok {
+			counter := 0
+			ipMap.Range(func(key, value interface{}) bool {
+				counter++
+				return true
+			})
+			if counter > deviceLimit && deviceLimit > 0 {
+				ipMap.Delete(ip)
+				return nil, false, true
 			}
 		}
 
@@ -208,16 +215,16 @@ func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *r
 		// Speed limit
 		limit := determineRate(nodeLimit, userLimit) // Determine the speed limit rate
 		if limit > 0 {
-			limiter := rate.NewLimiter(rate.Limit(limit), int(limit)) // Byte/s
-			if v, ok := inboundInfo.BucketHub.LoadOrStore(email, limiter); ok {
-				bucket := v.(*rate.Limiter)
-				return bucket, true, false
-			} else {
-				return limiter, true, false
+			if v, ok := inboundInfo.BucketHub.Load(email); ok {
+				return v.(*rate.Limiter), true, false
 			}
-		} else {
-			return nil, false, false
+			newLimiter := rate.NewLimiter(rate.Limit(limit), int(limit)) // Byte/s
+			if v, ok := inboundInfo.BucketHub.LoadOrStore(email, newLimiter); ok {
+				return v.(*rate.Limiter), true, false
+			}
+			return newLimiter, true, false
 		}
+		return nil, false, false
 	} else {
 		errors.LogDebug(context.Background(), "Get Inbound Limiter information failed")
 		return nil, false, false

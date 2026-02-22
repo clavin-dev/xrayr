@@ -25,6 +25,7 @@ type LimitInfo struct {
 	end               int64
 	currentSpeedLimit int
 	originSpeedLimit  uint64
+	user              api.UserInfo
 }
 
 type Controller struct {
@@ -36,8 +37,8 @@ type Controller struct {
 	Tag          string
 	userList     *[]api.UserInfo
 	tasks        []periodicTask
-	limitedUsers map[api.UserInfo]LimitInfo
-	warnedUsers  map[api.UserInfo]int
+	limitedUsers map[int]LimitInfo
+	warnedUsers  map[int]int
 	panelType    string
 	ibm          inbound.Manager
 	obm          outbound.Manager
@@ -132,8 +133,9 @@ func (c *Controller) Start() error {
 		c.config.AutoSpeedLimitConfig = &AutoSpeedLimitConfig{0, 0, 0, 0}
 	}
 	if c.config.AutoSpeedLimitConfig.Limit > 0 {
-		c.limitedUsers = make(map[api.UserInfo]LimitInfo)
-		c.warnedUsers = make(map[api.UserInfo]int)
+		capHint := len(*userInfo)
+		c.limitedUsers = make(map[int]LimitInfo, capHint)
+		c.warnedUsers = make(map[int]int, capHint)
 	}
 
 	// Add periodic tasks
@@ -288,7 +290,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			if len(deleted) > 0 {
 				deletedEmail := make([]string, len(deleted))
 				for i, u := range deleted {
-					deletedEmail[i] = fmt.Sprintf("%s|%s|%d", c.Tag, u.Email, u.UID)
+					deletedEmail[i] = c.buildUserTag(&u)
 				}
 				err := c.removeUsers(deletedEmail, c.Tag)
 				if err != nil {
@@ -432,37 +434,44 @@ func (c *Controller) addNewUser(userInfo *[]api.UserInfo, nodeInfo *api.NodeInfo
 }
 
 func compareUserList(old, new *[]api.UserInfo) (deleted, added []api.UserInfo) {
-	mSrc := make(map[api.UserInfo]byte) // 按源数组建索引
-	mAll := make(map[api.UserInfo]byte) // 源+目所有元素建索引
-
-	var set []api.UserInfo // 交集
-
-	// 1.源数组建立map
-	for _, v := range *old {
-		mSrc[v] = 0
-		mAll[v] = 0
+	if old == nil || len(*old) == 0 {
+		if new != nil {
+			added = append(added, (*new)...)
+		}
+		return deleted, added
 	}
-	// 2.目数组中，存不进去，即重复元素，所有存不进去的集合就是并集
-	for _, v := range *new {
-		l := len(mAll)
-		mAll[v] = 1
-		if l != len(mAll) { // 长度变化，即可以存
-			l = len(mAll)
-		} else { // 存不了，进并集
-			set = append(set, v)
+	if new == nil || len(*new) == 0 {
+		deleted = append(deleted, (*old)...)
+		return deleted, added
+	}
+
+	type userIdentity struct {
+		uid   int
+		email string
+	}
+
+	oldByIdentity := make(map[userIdentity]api.UserInfo, len(*old))
+	for _, user := range *old {
+		oldByIdentity[userIdentity{uid: user.UID, email: user.Email}] = user
+	}
+
+	seen := make(map[userIdentity]struct{}, len(*new))
+	for _, user := range *new {
+		identity := userIdentity{uid: user.UID, email: user.Email}
+		seen[identity] = struct{}{}
+
+		if oldUser, ok := oldByIdentity[identity]; !ok {
+			added = append(added, user)
+		} else if oldUser != user {
+			// Keep old behavior: modified users are treated as delete+add so downstream updates apply.
+			deleted = append(deleted, oldUser)
+			added = append(added, user)
 		}
 	}
-	// 3.遍历交集，在并集中找，找到就从并集中删，删完后就是补集（即并-交=所有变化的元素）
-	for _, v := range set {
-		delete(mAll, v)
-	}
-	// 4.此时，mall是补集，所有元素去源中找，找到就是删除的，找不到的必定能在目数组中找到，即新加的
-	for v := range mAll {
-		_, exist := mSrc[v]
-		if exist {
-			deleted = append(deleted, v)
-		} else {
-			added = append(added, v)
+
+	for identity, oldUser := range oldByIdentity {
+		if _, ok := seen[identity]; !ok {
+			deleted = append(deleted, oldUser)
 		}
 	}
 
@@ -470,12 +479,14 @@ func compareUserList(old, new *[]api.UserInfo) (deleted, added []api.UserInfo) {
 }
 
 func limitUser(c *Controller, user api.UserInfo, silentUsers *[]api.UserInfo) {
-	c.limitedUsers[user] = LimitInfo{
-		end:               time.Now().Unix() + int64(c.config.AutoSpeedLimitConfig.LimitDuration*60),
+	endAt := time.Now().Unix() + int64(c.config.AutoSpeedLimitConfig.LimitDuration*60)
+	c.limitedUsers[user.UID] = LimitInfo{
+		end:               endAt,
 		currentSpeedLimit: c.config.AutoSpeedLimitConfig.LimitSpeed,
 		originSpeedLimit:  user.SpeedLimit,
+		user:              user,
 	}
-	c.logger.Printf("Limit User: %s Speed: %d End: %s", c.buildUserTag(&user), c.config.AutoSpeedLimitConfig.LimitSpeed, time.Unix(c.limitedUsers[user].end, 0).Format("01-02 15:04:05"))
+	c.logger.Printf("Limit User: %s Speed: %d End: %s", c.buildUserTag(&user), c.config.AutoSpeedLimitConfig.LimitSpeed, time.Unix(endAt, 0).Format("01-02 15:04:05"))
 	user.SpeedLimit = uint64((c.config.AutoSpeedLimitConfig.LimitSpeed * 1000000) / 8)
 	*silentUsers = append(*silentUsers, user)
 }
@@ -503,16 +514,18 @@ func (c *Controller) userInfoMonitor() (err error) {
 	}
 	// Unlock users
 	if c.config.AutoSpeedLimitConfig.Limit > 0 && len(c.limitedUsers) > 0 {
+		nowUnix := time.Now().Unix()
 		c.logger.Printf("Limited users:")
-		toReleaseUsers := make([]api.UserInfo, 0)
-		for user, limitInfo := range c.limitedUsers {
-			if time.Now().Unix() > limitInfo.end {
+		toReleaseUsers := make([]api.UserInfo, 0, len(c.limitedUsers))
+		for uid, limitInfo := range c.limitedUsers {
+			user := limitInfo.user
+			if nowUnix > limitInfo.end {
 				user.SpeedLimit = limitInfo.originSpeedLimit
 				toReleaseUsers = append(toReleaseUsers, user)
 				c.logger.Printf("User: %s Speed: %d End: nil (Unlimit)", c.buildUserTag(&user), user.SpeedLimit)
-				delete(c.limitedUsers, user)
+				delete(c.limitedUsers, uid)
 			} else {
-				c.logger.Printf("User: %s Speed: %d End: %s", c.buildUserTag(&user), limitInfo.currentSpeedLimit, time.Unix(c.limitedUsers[user].end, 0).Format("01-02 15:04:05"))
+				c.logger.Printf("User: %s Speed: %d End: %s", c.buildUserTag(&user), limitInfo.currentSpeedLimit, time.Unix(limitInfo.end, 0).Format("01-02 15:04:05"))
 			}
 		}
 		if len(toReleaseUsers) > 0 {
@@ -523,35 +536,42 @@ func (c *Controller) userInfoMonitor() (err error) {
 	}
 
 	// Get User traffic
-	var userTraffic []api.UserTraffic
-	var upCounterList []stats.Counter
-	var downCounterList []stats.Counter
+	userCount := len(*c.userList)
+	userTraffic := make([]api.UserTraffic, 0, userCount)
+	upCounterList := make([]stats.Counter, 0, userCount)
+	downCounterList := make([]stats.Counter, 0, userCount)
 	AutoSpeedLimit := int64(c.config.AutoSpeedLimitConfig.Limit)
 	UpdatePeriodic := int64(c.config.UpdatePeriodic)
-	limitedUsers := make([]api.UserInfo, 0)
+	limitThreshold := AutoSpeedLimit * 1000000 * UpdatePeriodic / 8
+	limitedUsers := make([]api.UserInfo, 0, userCount)
 	for _, user := range *c.userList {
+		uid := user.UID
+		if limitInfo, ok := c.limitedUsers[uid]; ok {
+			limitInfo.user = user
+			c.limitedUsers[uid] = limitInfo
+		}
 		userTag := c.buildUserTag(&user)
 		up, down, upCounter, downCounter := c.getTraffic(userTag)
 		if down > 0 {
-			c.logger.Printf("Traffic counted: tag=%s up=%d down=%d", userTag, up, down)
+			c.logger.Debugf("Traffic counted: tag=%s up=%d down=%d", userTag, up, down)
 		}
 		if up > 0 || down > 0 {
 			// Over speed users
 			if AutoSpeedLimit > 0 {
-				if down > AutoSpeedLimit*1000000*UpdatePeriodic/8 || up > AutoSpeedLimit*1000000*UpdatePeriodic/8 {
-					if _, ok := c.limitedUsers[user]; !ok {
+				if down > limitThreshold || up > limitThreshold {
+					if _, ok := c.limitedUsers[uid]; !ok {
 						if c.config.AutoSpeedLimitConfig.WarnTimes == 0 {
 							limitUser(c, user, &limitedUsers)
 						} else {
-							c.warnedUsers[user] += 1
-							if c.warnedUsers[user] > c.config.AutoSpeedLimitConfig.WarnTimes {
+							c.warnedUsers[uid] += 1
+							if c.warnedUsers[uid] > c.config.AutoSpeedLimitConfig.WarnTimes {
 								limitUser(c, user, &limitedUsers)
-								delete(c.warnedUsers, user)
+								delete(c.warnedUsers, uid)
 							}
 						}
 					}
 				} else {
-					delete(c.warnedUsers, user)
+					delete(c.warnedUsers, uid)
 				}
 			}
 			userTraffic = append(userTraffic, api.UserTraffic{
@@ -567,7 +587,7 @@ func (c *Controller) userInfoMonitor() (err error) {
 				downCounterList = append(downCounterList, downCounter)
 			}
 		} else {
-			delete(c.warnedUsers, user)
+			delete(c.warnedUsers, uid)
 		}
 	}
 	if len(limitedUsers) > 0 {

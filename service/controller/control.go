@@ -139,13 +139,19 @@ func (c *Controller) getTraffic(email string) (up int64, down int64, upCounter s
 	downName := "user>>>" + email + ">>>traffic>>>downlink"
 	upCounter = c.stm.GetCounter(upName)
 	downCounter = c.stm.GetCounter(downName)
-	if upCounter != nil && upCounter.Value() != 0 {
+	if upCounter != nil {
 		up = upCounter.Value()
+		if up == 0 {
+			upCounter = nil
+		}
 	} else {
 		upCounter = nil
 	}
-	if downCounter != nil && downCounter.Value() != 0 {
+	if downCounter != nil {
 		down = downCounter.Value()
+		if down == 0 {
+			downCounter = nil
+		}
 	} else {
 		downCounter = nil
 	}

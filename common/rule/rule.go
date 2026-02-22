@@ -3,7 +3,6 @@ package rule
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -56,7 +55,7 @@ func (r *Manager) Detect(tag string, destination string, email string) (reject b
 	if value, ok := r.InboundRule.Load(tag); ok {
 		ruleList := value.([]api.DetectRule)
 		for _, r := range ruleList {
-			if r.Pattern.Match([]byte(destination)) {
+			if r.Pattern.MatchString(destination) {
 				hitRuleID = r.ID
 				reject = true
 				break
@@ -64,10 +63,14 @@ func (r *Manager) Detect(tag string, destination string, email string) (reject b
 		}
 		// If we hit some rule
 		if reject && hitRuleID != -1 {
-			l := strings.Split(email, "|")
-			uid, err := strconv.Atoi(l[len(l)-1])
+			idx := strings.LastIndexByte(email, '|')
+			if idx == -1 || idx+1 >= len(email) {
+				errors.LogDebug(context.Background(), "Record illegal behavior failed! Cannot find user's uid: ", email)
+				return reject
+			}
+			uid, err := strconv.Atoi(email[idx+1:])
 			if err != nil {
-				errors.LogDebug(context.Background(), fmt.Sprintf("Record illegal behavior failed! Cannot find user's uid: %s", email))
+				errors.LogDebug(context.Background(), "Record illegal behavior failed! Cannot find user's uid: ", email)
 				return reject
 			}
 			newSet := mapset.NewSetWith(api.DetectResult{UID: uid, RuleID: hitRuleID})
