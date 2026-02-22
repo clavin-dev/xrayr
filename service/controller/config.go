@@ -18,6 +18,7 @@ type Config struct {
 	EnableFallback            bool                             `mapstructure:"EnableFallback"`
 	DisableIVCheck            bool                             `mapstructure:"DisableIVCheck"`
 	DisableSniffing           bool                             `mapstructure:"DisableSniffing"`
+	EnableSpliceCopy          bool                             `mapstructure:"EnableSpliceCopy"`
 	AutoSpeedLimitConfig      *AutoSpeedLimitConfig            `mapstructure:"AutoSpeedLimitConfig"`
 	GlobalDeviceLimitConfig   *limiter.GlobalDeviceLimitConfig `mapstructure:"GlobalDeviceLimitConfig"`
 	FallBackConfigs           []*FallBackConfig                `mapstructure:"FallBackConfigs"`

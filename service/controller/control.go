@@ -25,6 +25,7 @@ func (c *Controller) removeInbound(tag string) error {
 // statsOutboundWrapper wraps outbound.Handler to ensure user downlink traffic is counted.
 type statsOutboundWrapper struct {
 	outbound.Handler
+	shouldDisableSplice func() bool
 }
 
 type trafficCounterPair struct {
@@ -33,9 +34,11 @@ type trafficCounterPair struct {
 }
 
 func (w *statsOutboundWrapper) Dispatch(ctx context.Context, link *transport.Link) {
-	// Disable kernel splice to avoid Vision/REALITY bypassing userland stats path
-	if sess := session.InboundFromContext(ctx); sess != nil {
-		sess.CanSpliceCopy = 3
+	if w.shouldDisableSplice != nil && w.shouldDisableSplice() {
+		// Disable kernel splice to avoid Vision/REALITY bypassing userland stats path.
+		if sess := session.InboundFromContext(ctx); sess != nil {
+			sess.CanSpliceCopy = 3
+		}
 	}
 	w.Handler.Dispatch(ctx, link)
 }
@@ -70,7 +73,10 @@ func (c *Controller) addOutbound(config *core.OutboundHandlerConfig) error {
 		return fmt.Errorf("not an InboundHandler: %s", err)
 	}
 	// Wrap outbound handler to ensure downlink stats are always counted (e.g., REALITY/VLESS cases)
-	handler = &statsOutboundWrapper{Handler: handler}
+	handler = &statsOutboundWrapper{
+		Handler:             handler,
+		shouldDisableSplice: c.dispatcher.ShouldDisableSplice,
+	}
 	if err := c.obm.AddHandler(context.Background(), handler); err != nil {
 		return err
 	}

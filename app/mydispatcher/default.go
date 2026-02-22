@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xtls/xray-core/app/dispatcher"
@@ -110,6 +111,7 @@ type DefaultDispatcher struct {
 	Limiter                 *limiter.Limiter
 	RuleManager             *rule.Manager
 	userTrafficCounterCache *sync.Map
+	disableSpliceVotes      atomic.Int32
 }
 
 func init() {
@@ -207,6 +209,20 @@ func (d *DefaultDispatcher) ResetUserTrafficCounterCache() {
 	})
 }
 
+func (d *DefaultDispatcher) AddDisableSpliceVote() {
+	d.disableSpliceVotes.Add(1)
+}
+
+func (d *DefaultDispatcher) RemoveDisableSpliceVote() {
+	if d.disableSpliceVotes.Add(-1) < 0 {
+		d.disableSpliceVotes.Store(0)
+	}
+}
+
+func (d *DefaultDispatcher) ShouldDisableSplice() bool {
+	return d.disableSpliceVotes.Load() > 0
+}
+
 func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *transport.Link, error) {
 	opt := pipe.OptionsFromContext(ctx)
 	uplinkReader, uplinkWriter := pipe.New(opt...)
@@ -225,10 +241,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 	sessionInbound := session.InboundFromContext(ctx)
 	var user *protocol.MemoryUser
 	if sessionInbound != nil {
-		// Disable splice to avoid Vision/REALITY bypassing stats path
-		sessionInbound.CanSpliceCopy = 3
+		if d.ShouldDisableSplice() {
+			// Disable splice to avoid Vision/REALITY bypassing userland stats/limiter path.
+			sessionInbound.CanSpliceCopy = 3
+		}
 		user = sessionInbound.User
-		sessionInbound.CanSpliceCopy = 3
 	}
 
 	if user != nil && len(user.Email) > 0 {

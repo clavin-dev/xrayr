@@ -47,6 +47,7 @@ type Controller struct {
 	trafficSweepTick    int
 	panelType           string
 	isV2boardPanel      bool
+	spliceVoteAdded     bool
 	ibm                 inbound.Manager
 	obm                 outbound.Manager
 	stm                 stats.Manager
@@ -175,6 +176,11 @@ func (c *Controller) Start() error {
 			}})
 	}
 
+	if !c.config.EnableSpliceCopy {
+		c.dispatcher.AddDisableSpliceVote()
+		c.spliceVoteAdded = true
+	}
+
 	// Start periodic tasks
 	for i := range c.tasks {
 		c.logger.Printf("Start %s periodic task", c.tasks[i].tag)
@@ -186,6 +192,11 @@ func (c *Controller) Start() error {
 
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
+	if c.spliceVoteAdded {
+		c.dispatcher.RemoveDisableSpliceVote()
+		c.spliceVoteAdded = false
+	}
+
 	for i := range c.tasks {
 		if c.tasks[i].Periodic != nil {
 			if err := c.tasks[i].Periodic.Close(); err != nil {
