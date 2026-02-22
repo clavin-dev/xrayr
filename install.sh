@@ -59,7 +59,7 @@ install_binary() {
   local artifact="$1"
   local tmp_dir
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "${tmp_dir}"' EXIT
+  trap "rm -rf '${tmp_dir}'" EXIT
 
   mkdir -p "${install_dir}"
   download "${raw_base}/attachments/XrayR-${artifact}.tar.gz" "${tmp_dir}/xrayr.tar.gz"
@@ -71,6 +71,8 @@ install_binary() {
   fi
 
   install -m 755 "${tmp_dir}/XrayR-${artifact}" "${binary_path}"
+  rm -rf "${tmp_dir}"
+  trap - EXIT
 }
 
 sync_file_if_absent() {
