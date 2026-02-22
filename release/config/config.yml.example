@@ -11,7 +11,7 @@ ConnectionConfig:
   ConnIdle: 30 # Connection idle time limit, Second
   UplinkOnly: 2 # Time limit when the connection downstream is closed, Second
   DownlinkOnly: 4 # Time limit when the connection is closed after the uplink is closed, Second
-  BufferSize: 64 # The internal cache size of each connection, kB
+  BufferSize: 16 # The internal cache size of each connection, kB. For high-concurrency WebSocket, 8-16 is recommended.
 Nodes:
   - PanelType: "SSpanel" # Panel type: SSpanel, NewV2board, PMpanel, Proxypanel, V2RaySocks, GoV2Panel, BunPanel
     ApiConfig:

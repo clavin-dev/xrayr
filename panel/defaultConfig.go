@@ -16,7 +16,7 @@ func getDefaultConnectionConfig() *ConnectionConfig {
 		ConnIdle:     30,
 		UplinkOnly:   2,
 		DownlinkOnly: 4,
-		BufferSize:   64,
+		BufferSize:   16,
 	}
 }
 
