@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -39,14 +40,16 @@ type Controller struct {
 	tasks        []periodicTask
 	limitedUsers map[int]LimitInfo
 	warnedUsers  map[int]int
-	panelType    string
-	ibm          inbound.Manager
-	obm          outbound.Manager
-	stm          stats.Manager
-	pm           policy.Manager
-	dispatcher   *mydispatcher.DefaultDispatcher
-	startAt      time.Time
-	logger       *log.Entry
+	// Cache per-user traffic counters to avoid repeated stats manager lookups.
+	trafficCounterCache *sync.Map
+	panelType           string
+	ibm                 inbound.Manager
+	obm                 outbound.Manager
+	stm                 stats.Manager
+	pm                  policy.Manager
+	dispatcher          *mydispatcher.DefaultDispatcher
+	startAt             time.Time
+	logger              *log.Entry
 }
 
 type periodicTask struct {
@@ -62,17 +65,18 @@ func New(server *core.Instance, api api.API, config *Config, panelType string) *
 		"ID":   api.Describe().NodeID,
 	})
 	controller := &Controller{
-		server:     server,
-		config:     config,
-		apiClient:  api,
-		panelType:  panelType,
-		ibm:        server.GetFeature(inbound.ManagerType()).(inbound.Manager),
-		obm:        server.GetFeature(outbound.ManagerType()).(outbound.Manager),
-		stm:        server.GetFeature(stats.ManagerType()).(stats.Manager),
-		pm:         server.GetFeature(policy.ManagerType()).(policy.Manager),
-		dispatcher: server.GetFeature(mydispatcher.Type()).(*mydispatcher.DefaultDispatcher),
-		startAt:    time.Now(),
-		logger:     logger,
+		server:              server,
+		config:              config,
+		apiClient:           api,
+		panelType:           panelType,
+		trafficCounterCache: new(sync.Map),
+		ibm:                 server.GetFeature(inbound.ManagerType()).(inbound.Manager),
+		obm:                 server.GetFeature(outbound.ManagerType()).(outbound.Manager),
+		stm:                 server.GetFeature(stats.ManagerType()).(stats.Manager),
+		pm:                  server.GetFeature(policy.ManagerType()).(policy.Manager),
+		dispatcher:          server.GetFeature(mydispatcher.Type()).(*mydispatcher.DefaultDispatcher),
+		startAt:             time.Now(),
+		logger:              logger,
 	}
 
 	return controller
@@ -271,6 +275,10 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	}
 
 	if nodeInfoChanged {
+		c.trafficCounterCache.Range(func(key, value interface{}) bool {
+			c.trafficCounterCache.Delete(key)
+			return true
+		})
 		err = c.addNewUser(newUserInfo, newNodeInfo)
 		if err != nil {
 			c.logger.Print(err)
@@ -291,6 +299,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 				deletedEmail := make([]string, len(deleted))
 				for i, u := range deleted {
 					deletedEmail[i] = c.buildUserTag(&u)
+					c.trafficCounterCache.Delete(deletedEmail[i])
 				}
 				err := c.removeUsers(deletedEmail, c.Tag)
 				if err != nil {

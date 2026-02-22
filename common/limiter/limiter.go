@@ -193,20 +193,20 @@ func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *r
 			ipMap = actual.(*sync.Map)
 		}
 		// If this is a new ip
-		if _, ok := ipMap.LoadOrStore(ip, uid); !ok {
+		if _, ok := ipMap.LoadOrStore(ip, uid); !ok && deviceLimit > 0 {
 			counter := 0
 			ipMap.Range(func(key, value interface{}) bool {
 				counter++
 				return true
 			})
-			if counter > deviceLimit && deviceLimit > 0 {
+			if counter > deviceLimit {
 				ipMap.Delete(ip)
 				return nil, false, true
 			}
 		}
 
 		// GlobalLimit
-		if inboundInfo.GlobalLimit.config != nil && inboundInfo.GlobalLimit.config.Enable {
+		if deviceLimit > 0 && inboundInfo.GlobalLimit.config != nil && inboundInfo.GlobalLimit.config.Enable {
 			if reject := globalLimit(inboundInfo, email, uid, ip, deviceLimit); reject {
 				return nil, false, true
 			}
@@ -233,6 +233,9 @@ func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *r
 
 // Global device limit
 func globalLimit(inboundInfo *InboundInfo, email string, uid int, ip string, deviceLimit int) bool {
+	if deviceLimit <= 0 {
+		return false
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(inboundInfo.GlobalLimit.config.Timeout)*time.Second)
 	defer cancel()

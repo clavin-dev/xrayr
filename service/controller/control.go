@@ -30,6 +30,11 @@ type statsOutboundWrapper struct {
 	sm stats.Manager
 }
 
+type trafficCounterPair struct {
+	up   stats.Counter
+	down stats.Counter
+}
+
 func (w *statsOutboundWrapper) Dispatch(ctx context.Context, link *transport.Link) {
 	// Disable kernel splice to avoid Vision/REALITY bypassing userland stats path
 	if sess := session.InboundFromContext(ctx); sess != nil {
@@ -135,10 +140,22 @@ func (c *Controller) removeUsers(users []string, tag string) error {
 }
 
 func (c *Controller) getTraffic(email string) (up int64, down int64, upCounter stats.Counter, downCounter stats.Counter) {
-	upName := "user>>>" + email + ">>>traffic>>>uplink"
-	downName := "user>>>" + email + ">>>traffic>>>downlink"
-	upCounter = c.stm.GetCounter(upName)
-	downCounter = c.stm.GetCounter(downName)
+	if cached, ok := c.trafficCounterCache.Load(email); ok {
+		if pair, ok := cached.(trafficCounterPair); ok {
+			upCounter = pair.up
+			downCounter = pair.down
+		}
+	}
+	if upCounter == nil || downCounter == nil {
+		upName := "user>>>" + email + ">>>traffic>>>uplink"
+		downName := "user>>>" + email + ">>>traffic>>>downlink"
+		upCounter = c.stm.GetCounter(upName)
+		downCounter = c.stm.GetCounter(downName)
+		c.trafficCounterCache.Store(email, trafficCounterPair{
+			up:   upCounter,
+			down: downCounter,
+		})
+	}
 	if upCounter != nil {
 		up = upCounter.Value()
 		if up == 0 {
