@@ -203,6 +203,10 @@ func (c *Controller) GetOnlineDevice(tag string) (*[]api.OnlineUser, error) {
 	return c.dispatcher.Limiter.GetOnlineDevice(tag)
 }
 
+func (c *Controller) GetOnlineUserKeys(tag string) ([]string, error) {
+	return c.dispatcher.Limiter.GetOnlineUserKeys(tag)
+}
+
 func (c *Controller) UpdateRule(tag string, newRuleList []api.DetectRule) error {
 	err := c.dispatcher.RuleManager.UpdateRule(tag, newRuleList)
 	return err

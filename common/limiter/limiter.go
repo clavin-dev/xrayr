@@ -166,6 +166,20 @@ func (l *Limiter) GetOnlineDevice(tag string) (*[]api.OnlineUser, error) {
 	return &onlineUser, nil
 }
 
+// GetOnlineUserKeys returns current online user keys without clearing online states.
+func (l *Limiter) GetOnlineUserKeys(tag string) ([]string, error) {
+	if value, ok := l.InboundInfo.Load(tag); ok {
+		inboundInfo := value.(*InboundInfo)
+		keys := make([]string, 0)
+		inboundInfo.UserOnlineIP.Range(func(key, value interface{}) bool {
+			keys = append(keys, key.(string))
+			return true
+		})
+		return keys, nil
+	}
+	return nil, fmt.Errorf("no such inbound in limiter: %s", tag)
+}
+
 func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *rate.Limiter, SpeedLimit bool, Reject bool) {
 	if value, ok := l.InboundInfo.Load(tag); ok {
 		var (

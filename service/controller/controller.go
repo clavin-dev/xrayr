@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +44,7 @@ type Controller struct {
 	warnedUsers  map[int]int
 	// Cache per-user traffic counters to avoid repeated stats manager lookups.
 	trafficCounterCache *sync.Map
+	trafficSweepTick    int
 	panelType           string
 	ibm                 inbound.Manager
 	obm                 outbound.Manager
@@ -56,6 +59,8 @@ type periodicTask struct {
 	tag string
 	*task.Periodic
 }
+
+const fastTrafficFullSweepInterval = 5
 
 // New return a Controller service with default parameters.
 func New(server *core.Instance, api api.API, config *Config, panelType string) *Controller {
@@ -500,6 +505,22 @@ func limitUser(c *Controller, user api.UserInfo, silentUsers *[]api.UserInfo) {
 	*silentUsers = append(*silentUsers, user)
 }
 
+func parseUserTag(userTag string) (uid int, email string, ok bool) {
+	last := strings.LastIndexByte(userTag, '|')
+	if last <= 0 || last+1 >= len(userTag) {
+		return 0, "", false
+	}
+	prev := strings.LastIndexByte(userTag[:last], '|')
+	if prev < 0 || prev+1 >= last {
+		return 0, "", false
+	}
+	parsedUID, err := strconv.Atoi(userTag[last+1:])
+	if err != nil {
+		return 0, "", false
+	}
+	return parsedUID, userTag[prev+1 : last], true
+}
+
 func (c *Controller) userInfoMonitor() (err error) {
 	// delay to start
 	if time.Since(c.startAt) < time.Duration(c.config.UpdatePeriodic)*time.Second {
@@ -545,6 +566,7 @@ func (c *Controller) userInfoMonitor() (err error) {
 	}
 
 	// Get User traffic
+	c.trafficSweepTick++
 	userCount := len(*c.userList)
 	userTraffic := make([]api.UserTraffic, 0, userCount)
 	upCounterList := make([]stats.Counter, 0, userCount)
@@ -553,50 +575,98 @@ func (c *Controller) userInfoMonitor() (err error) {
 	UpdatePeriodic := int64(c.config.UpdatePeriodic)
 	limitThreshold := AutoSpeedLimit * 1000000 * UpdatePeriodic / 8
 	limitedUsers := make([]api.UserInfo, 0, userCount)
-	for _, user := range *c.userList {
-		uid := user.UID
-		if limitInfo, ok := c.limitedUsers[uid]; ok {
-			limitInfo.user = user
-			c.limitedUsers[uid] = limitInfo
-		}
-		userTag := c.buildUserTag(&user)
-		up, down, upCounter, downCounter := c.getTraffic(userTag)
-		if down > 0 {
-			c.logger.Debugf("Traffic counted: tag=%s up=%d down=%d", userTag, up, down)
-		}
-		if up > 0 || down > 0 {
-			// Over speed users
-			if AutoSpeedLimit > 0 {
-				if down > limitThreshold || up > limitThreshold {
-					if _, ok := c.limitedUsers[uid]; !ok {
-						if c.config.AutoSpeedLimitConfig.WarnTimes == 0 {
-							limitUser(c, user, &limitedUsers)
-						} else {
-							c.warnedUsers[uid] += 1
-							if c.warnedUsers[uid] > c.config.AutoSpeedLimitConfig.WarnTimes {
-								limitUser(c, user, &limitedUsers)
-								delete(c.warnedUsers, uid)
-							}
-						}
-					}
-				} else {
-					delete(c.warnedUsers, uid)
+	forceFullSweep := c.trafficSweepTick%fastTrafficFullSweepInterval == 0
+	useFastScan := AutoSpeedLimit == 0 && !forceFullSweep
+	if useFastScan {
+		onlineUserKeys, onlineErr := c.GetOnlineUserKeys(c.Tag)
+		if onlineErr != nil {
+			c.logger.Print(onlineErr)
+			useFastScan = false
+		} else if len(onlineUserKeys) > 0 {
+			userTraffic = make([]api.UserTraffic, 0, len(onlineUserKeys))
+			upCounterList = make([]stats.Counter, 0, len(onlineUserKeys))
+			downCounterList = make([]stats.Counter, 0, len(onlineUserKeys))
+			seen := make(map[string]struct{}, len(onlineUserKeys))
+			for _, userTag := range onlineUserKeys {
+				if _, ok := seen[userTag]; ok {
+					continue
+				}
+				seen[userTag] = struct{}{}
+
+				up, down, upCounter, downCounter := c.getTraffic(userTag)
+				if up == 0 && down == 0 {
+					continue
+				}
+				if down > 0 {
+					c.logger.Debugf("Traffic counted: tag=%s up=%d down=%d", userTag, up, down)
+				}
+				uid, email, ok := parseUserTag(userTag)
+				if !ok {
+					c.logger.Debugf("Invalid user tag skipped: %s", userTag)
+					continue
+				}
+				userTraffic = append(userTraffic, api.UserTraffic{
+					UID:      uid,
+					Email:    email,
+					Upload:   up,
+					Download: down,
+				})
+				if upCounter != nil {
+					upCounterList = append(upCounterList, upCounter)
+				}
+				if downCounter != nil {
+					downCounterList = append(downCounterList, downCounter)
 				}
 			}
-			userTraffic = append(userTraffic, api.UserTraffic{
-				UID:      user.UID,
-				Email:    user.Email,
-				Upload:   up,
-				Download: down})
+		}
+	}
 
-			if upCounter != nil {
-				upCounterList = append(upCounterList, upCounter)
+	if !useFastScan {
+		for _, user := range *c.userList {
+			uid := user.UID
+			if limitInfo, ok := c.limitedUsers[uid]; ok {
+				limitInfo.user = user
+				c.limitedUsers[uid] = limitInfo
 			}
-			if downCounter != nil {
-				downCounterList = append(downCounterList, downCounter)
+			userTag := c.buildUserTag(&user)
+			up, down, upCounter, downCounter := c.getTraffic(userTag)
+			if down > 0 {
+				c.logger.Debugf("Traffic counted: tag=%s up=%d down=%d", userTag, up, down)
 			}
-		} else {
-			delete(c.warnedUsers, uid)
+			if up > 0 || down > 0 {
+				// Over speed users
+				if AutoSpeedLimit > 0 {
+					if down > limitThreshold || up > limitThreshold {
+						if _, ok := c.limitedUsers[uid]; !ok {
+							if c.config.AutoSpeedLimitConfig.WarnTimes == 0 {
+								limitUser(c, user, &limitedUsers)
+							} else {
+								c.warnedUsers[uid] += 1
+								if c.warnedUsers[uid] > c.config.AutoSpeedLimitConfig.WarnTimes {
+									limitUser(c, user, &limitedUsers)
+									delete(c.warnedUsers, uid)
+								}
+							}
+						}
+					} else {
+						delete(c.warnedUsers, uid)
+					}
+				}
+				userTraffic = append(userTraffic, api.UserTraffic{
+					UID:      user.UID,
+					Email:    user.Email,
+					Upload:   up,
+					Download: down})
+
+				if upCounter != nil {
+					upCounterList = append(upCounterList, upCounter)
+				}
+				if downCounter != nil {
+					downCounterList = append(downCounterList, downCounter)
+				}
+			} else {
+				delete(c.warnedUsers, uid)
+			}
 		}
 	}
 	if len(limitedUsers) > 0 {
