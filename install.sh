@@ -190,7 +190,11 @@ esac
 EOF
 
   chmod +x /usr/bin/XrayR
-  ln -sf /usr/bin/XrayR /usr/bin/xrayr
+  if [[ -e /usr/bin/XrayR && -e /usr/bin/xrayr ]] && [[ /usr/bin/XrayR -ef /usr/bin/xrayr ]]; then
+    :
+  else
+    ln -sfn /usr/bin/XrayR /usr/bin/xrayr
+  fi
 }
 
 main() {

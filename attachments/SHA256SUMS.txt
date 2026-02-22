@@ -1,2 +1,2 @@
-a0d4334a2279b165e84849c0b2507d3834f96b4603abc114ec2c8295b5a857ca  attachments/XrayR-linux-amd64.tar.gz
-9f65b8e541e131ebc5f7a33b4a7980f068624da0732caf722f8a0a4b6773cf12  attachments/XrayR-linux-arm64.tar.gz
+6d266c14f9fc2dbbfb036a9f2bb8651df49b18f643e8099746d883eb13c91669  attachments/XrayR-linux-amd64.tar.gz
+97516ed7cfba27c8fd5acb4e6e086da44a26491d050711dbc72d8645d68a4670  attachments/XrayR-linux-arm64.tar.gz
