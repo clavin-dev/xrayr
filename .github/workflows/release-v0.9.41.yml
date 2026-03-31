@@ -1,0 +1,77 @@
+name: Release v0.9.41
+
+on:
+  push:
+    tags:
+      - "v0.9.41"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            friendly_name: linux-64
+          - goarch: arm64
+            friendly_name: linux-arm64-v8a
+          - goarch: s390x
+            friendly_name: linux-s390x
+
+    env:
+      CGO_ENABLED: 0
+      GOOS: linux
+      GOARCH: ${{ matrix.goarch }}
+      ASSET_NAME: ${{ matrix.friendly_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "^1.25"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build and package
+        run: |
+          mkdir -p build_assets
+          go build -v -trimpath -ldflags "-s -w -buildid= -X github.com/XrayR-project/XrayR/cmd.version=0.9.41" -o build_assets/XrayR
+
+          cp README.md build_assets/README.md
+          cp LICENSE build_assets/LICENSE
+          cp release/config/dns.json build_assets/dns.json
+          cp release/config/route.json build_assets/route.json
+          cp release/config/custom_outbound.json build_assets/custom_outbound.json
+          cp release/config/custom_inbound.json build_assets/custom_inbound.json
+          cp release/config/rulelist build_assets/rulelist
+          cp release/config/config.yml.example build_assets/config.yml
+          cp release/config/geoip.dat build_assets/geoip.dat
+          cp release/config/geosite.dat build_assets/geosite.dat
+
+          pushd build_assets
+          zip -9vr "../XrayR-${ASSET_NAME}.zip" .
+          popd
+
+          FILE="XrayR-${ASSET_NAME}.zip"
+          DGST="${FILE}.dgst"
+          : > "${DGST}"
+          for METHOD in md5 sha1 sha256 sha512; do
+            openssl dgst -"${METHOD}" "${FILE}" | sed 's/([^)]*)//g' >> "${DGST}"
+          done
+
+      - name: Upload to GitHub Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./XrayR-${{ matrix.friendly_name }}.zip*
+          tag: ${{ github.ref }}
+          file_glob: true
+          overwrite: true
